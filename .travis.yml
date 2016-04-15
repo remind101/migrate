@@ -1,0 +1,10 @@
+language: go
+
+go:
+  - 1.5
+
+before_install:
+  - go install -a -race std
+
+script:
+  - go test -race ./...
