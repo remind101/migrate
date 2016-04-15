@@ -140,6 +140,7 @@ func TestMigrate_Rollback(t *testing.T) {
 	assert.Equal(t, []int{}, appliedMigrations(t, db))
 	// If the transaction wasn't rolled back, we'd see a people table.
 	assertSchema(t, ``, db)
+	assert.IsType(t, &migrate.MigrationError{}, err)
 }
 
 func assertSchema(t testing.TB, expectedSchema string, db *sql.DB) {

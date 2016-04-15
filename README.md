@@ -6,7 +6,7 @@ Migrate is a Go library for doing migrations. It's stupidly simple and gets out 
 
 * It doesn't try to support multiple databases. It's only dependency is `database/sql`.
 * It supports any type of migration you want to run (e.g. raw sql, or Go code).
-* It doesn't provide a command. It's designed to be embedded in projects.
+* It doesn't provide a command. It's designed to be embedded in projects and used exclusively as a library.
 
 ## Usage
 

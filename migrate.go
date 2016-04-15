@@ -15,6 +15,20 @@ const (
 	Down
 )
 
+// MigrationError is an error that gets returned when an individual migration
+// fails.
+type MigrationError struct {
+	Migration
+
+	// The underlying error.
+	Err error
+}
+
+// Error implements the error interface.
+func (e *MigrationError) Error() string {
+	return fmt.Sprintf("migration %d failed: %v", e.ID, e.Err)
+}
+
 // The default table to store what migrations have been run.
 const DefaultTable = "migrations"
 
@@ -88,7 +102,7 @@ func (m *Migrator) Exec(dir MigrationDirection, migrations ...Migration) error {
 
 		if err := migrate(tx); err != nil {
 			tx.Rollback()
-			return err
+			return &MigrationError{Migration: migration, Err: err}
 		}
 
 		var query string
