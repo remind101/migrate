@@ -6,8 +6,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/ejholmes/migrate"
 	_ "github.com/mattn/go-sqlite3"
+	"github.com/remind101/migrate"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -166,7 +166,7 @@ ORDER BY name;`)
 		if err := rows.Scan(&name, &sql); err != nil {
 			return "", err
 		}
-		if name == "migrations" {
+		if name == migrate.DefaultTable {
 			continue
 		}
 		tables = append(tables, fmt.Sprintf("%s\n%s", name, sql))
@@ -175,7 +175,7 @@ ORDER BY name;`)
 }
 
 func appliedMigrations(t testing.TB, db *sql.DB) []int {
-	rows, err := db.Query("SELECT id FROM migrations")
+	rows, err := db.Query("SELECT version FROM " + migrate.DefaultTable)
 	if err != nil {
 		t.Fatal(err)
 	}

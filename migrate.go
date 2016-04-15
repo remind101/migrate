@@ -30,7 +30,7 @@ func (e *MigrationError) Error() string {
 }
 
 // The default table to store what migrations have been run.
-const DefaultTable = "migrations"
+const DefaultTable = "schema_migrations"
 
 // Migration represents a sql migration that can be migrated up or down.
 type Migration struct {
@@ -72,7 +72,7 @@ func NewMigrator(db *sql.DB) *Migrator {
 
 // Exec runs the migrations in the given direction.
 func (m *Migrator) Exec(dir MigrationDirection, migrations ...Migration) error {
-	_, err := m.db.Exec(fmt.Sprintf("CREATE TABLE IF NOT EXISTS %s (id integer)", m.table()))
+	_, err := m.db.Exec(fmt.Sprintf("CREATE TABLE IF NOT EXISTS %s (version integer primary key not null)", m.table()))
 	if err != nil {
 		return err
 	}
@@ -113,9 +113,9 @@ func (m *Migrator) Exec(dir MigrationDirection, migrations ...Migration) error {
 			//
 			// If you're running migrations from user input, you're doing
 			// something wrong.
-			query = fmt.Sprintf("INSERT INTO %s (id) VALUES (%d)", m.table(), migration.ID)
+			query = fmt.Sprintf("INSERT INTO %s (version) VALUES (%d)", m.table(), migration.ID)
 		default:
-			query = fmt.Sprintf("DELETE FROM %s WHERE id = %d", m.table(), migration.ID)
+			query = fmt.Sprintf("DELETE FROM %s WHERE version = %d", m.table(), migration.ID)
 		}
 
 		_, err = tx.Exec(query)
@@ -134,7 +134,7 @@ func (m *Migrator) Exec(dir MigrationDirection, migrations ...Migration) error {
 func (m *Migrator) shouldMigrate(id int, dir MigrationDirection) (bool, error) {
 	// Check if this migration has already ran
 	var _id int
-	err := m.db.QueryRow(fmt.Sprintf("SELECT id FROM %s WHERE id = %d", m.table(), id)).Scan(&_id)
+	err := m.db.QueryRow(fmt.Sprintf("SELECT version FROM %s WHERE version = %d", m.table(), id)).Scan(&_id)
 	if err != nil && err != sql.ErrNoRows {
 		return false, err
 	}
