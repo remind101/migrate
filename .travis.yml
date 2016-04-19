@@ -3,8 +3,15 @@ language: go
 go:
   - 1.5
 
+services:
+  - postgres
+
 before_install:
   - go install -a -race std
 
+env:
+  - DB=sqlite3
+  - DB=postgres
+
 script:
-  - go test -race ./...
+  - go test -v -race ./... -test.database=$DB
