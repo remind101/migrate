@@ -2,14 +2,26 @@ package migrate_test
 
 import (
 	"database/sql"
+	"flag"
 	"fmt"
+	"os"
+	"os/exec"
 	"strings"
 	"testing"
 
+	_ "github.com/lib/pq"
 	_ "github.com/mattn/go-sqlite3"
 	"github.com/remind101/migrate"
 	"github.com/stretchr/testify/assert"
 )
+
+const (
+	Sqlite   = "sqlite3"
+	Postgres = "postgres"
+)
+
+// A flag to determine what database to run the suite against.
+var database = flag.String("test.database", Sqlite, "The name of the database to run against. (sqlite3, postgres).")
 
 var testMigrations = []migrate.Migration{
 	{
@@ -41,6 +53,7 @@ var testMigrations = []migrate.Migration{
 
 func TestMigrate(t *testing.T) {
 	db := newDB(t)
+	defer db.Close()
 
 	migrations := testMigrations[:]
 
@@ -60,6 +73,7 @@ CREATE TABLE people (id int, first_name text)
 
 func TestMigrate_Individual(t *testing.T) {
 	db := newDB(t)
+	defer db.Close()
 
 	err := migrate.Exec(db, migrate.Up, testMigrations[0])
 	assert.NoError(t, err)
@@ -80,6 +94,7 @@ CREATE TABLE people (id int, first_name text)
 
 func TestMigrate_AlreadyRan(t *testing.T) {
 	db := newDB(t)
+	defer db.Close()
 
 	migration := testMigrations[0]
 
@@ -102,6 +117,7 @@ CREATE TABLE people (id int)
 
 func TestMigrate_Order(t *testing.T) {
 	db := newDB(t)
+	defer db.Close()
 
 	migrations := []migrate.Migration{
 		testMigrations[1],
@@ -119,6 +135,7 @@ CREATE TABLE people (id int, first_name text)
 
 func TestMigrate_Rollback(t *testing.T) {
 	db := newDB(t)
+	defer db.Close()
 
 	migration := migrate.Migration{
 		ID: 1,
@@ -144,15 +161,17 @@ func TestMigrate_Rollback(t *testing.T) {
 }
 
 func assertSchema(t testing.TB, expectedSchema string, db *sql.DB) {
-	schema, err := schema(db)
-	if err != nil {
-		t.Fatal(err)
-	}
+	if *database == Sqlite {
+		schema, err := sqliteSchema(db)
+		if err != nil {
+			t.Fatal(err)
+		}
 
-	assert.Equal(t, strings.TrimSpace(expectedSchema), schema)
+		assert.Equal(t, strings.TrimSpace(expectedSchema), schema)
+	}
 }
 
-func schema(db *sql.DB) (string, error) {
+func sqliteSchema(db *sql.DB) (string, error) {
 	var tables []string
 	rows, err := db.Query(`SELECT name, sql FROM sqlite_master
 WHERE type='table'
@@ -193,10 +212,40 @@ func appliedMigrations(t testing.TB, db *sql.DB) []int {
 	return ids
 }
 
+// factory methods to open a database connection to a type of database.
+var databases = map[string]func() (*sql.DB, error){
+	Postgres: func() (*sql.DB, error) {
+		name := "migrate_test"
+
+		command := func(name string, arg ...string) *exec.Cmd {
+			cmd := exec.Command(name, arg...)
+			cmd.Stderr = os.Stderr
+			cmd.Stdout = os.Stdout
+			return cmd
+		}
+
+		command("dropdb", name).Run()
+		if err := command("createdb", name).Run(); err != nil {
+			return nil, err
+		}
+
+		return sql.Open("postgres", fmt.Sprintf("postgres://localhost/%s?sslmode=disable", name))
+	},
+	Sqlite: func() (*sql.DB, error) {
+		return sql.Open("sqlite3", ":memory:")
+	},
+}
+
 func newDB(t testing.TB) *sql.DB {
-	db, err := sql.Open("sqlite3", ":memory:")
+	open, ok := databases[*database]
+	if !ok {
+		t.Fatal(fmt.Sprintf("Unknown database: %s", *database))
+	}
+
+	db, err := open()
 	if err != nil {
 		t.Fatal(err)
 	}
+
 	return db
 }
