@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"hash/crc32"
 	"sort"
+	"sync"
 )
 
 type MigrationDirection int
@@ -60,18 +61,52 @@ type Migrator struct {
 	// value is DefaultTable.
 	Table string
 
-	// Lock is a function that will be called that should ensure that only 1
-	// migration is being run at any time.
-	Lock func(tx *sql.Tx, migration Migration) error
+	// Locker is a sync.Locker to use to ensure that only 1 process is
+	// running migrations.
+	sync.Locker
 
 	db *sql.DB
+}
+
+// postgresLocker implements the sync.Locker interface using pg_advisory_lock.
+type postgresLocker struct {
+	key uint32
+	db  *sql.DB
+}
+
+// NewPostgresLocker returns a new sync.Locker that obtains locks with
+// pg_advisory_lock.
+func newPostgresLocker(db *sql.DB) sync.Locker {
+	key := crc32.ChecksumIEEE([]byte("migrations"))
+	return &postgresLocker{
+		key: key,
+		db:  db,
+	}
+}
+
+// Lock obtains the advisory lock.
+func (l *postgresLocker) Lock() {
+	l.do("lock")
+}
+
+// Unlock removes the advisory Lock
+func (l *postgresLocker) Unlock() {
+	l.do("unlock")
+}
+
+func (l *postgresLocker) do(m string) {
+	_, err := l.db.Exec(fmt.Sprintf("SELECT pg_advisory_%s(%d)", m, l.key))
+	if err != nil {
+		panic(fmt.Sprintf("migrate: %v", err))
+	}
 }
 
 // NewMigrator returns a new Migrator instance that will use the sql.DB to
 // perform the migrations.
 func NewMigrator(db *sql.DB) *Migrator {
 	return &Migrator{
-		db: db,
+		db:     db,
+		Locker: new(sync.Mutex),
 	}
 }
 
@@ -80,12 +115,15 @@ func NewMigrator(db *sql.DB) *Migrator {
 // Postgres's advisory locks to ensure that only 1 migration is run at a time.
 func NewPostgresMigrator(db *sql.DB) *Migrator {
 	m := NewMigrator(db)
-	m.Lock = AdvisoryLock
+	m.Locker = newPostgresLocker(db)
 	return m
 }
 
 // Exec runs the migrations in the given direction.
 func (m *Migrator) Exec(dir MigrationDirection, migrations ...Migration) error {
+	m.Lock()
+	defer m.Unlock()
+
 	_, err := m.db.Exec(fmt.Sprintf("CREATE TABLE IF NOT EXISTS %s (version integer primary key not null)", m.table()))
 	if err != nil {
 		return err
@@ -94,11 +132,6 @@ func (m *Migrator) Exec(dir MigrationDirection, migrations ...Migration) error {
 	for _, migration := range sortMigrations(dir, migrations) {
 		tx, err := m.db.Begin()
 		if err != nil {
-			return err
-		}
-
-		if err := m.lock(tx, migration); err != nil {
-			tx.Rollback()
 			return err
 		}
 
@@ -170,14 +203,6 @@ func (m *Migrator) shouldMigrate(tx *sql.Tx, id int, dir MigrationDirection) (bo
 	}
 }
 
-func (m *Migrator) lock(tx *sql.Tx, migration Migration) error {
-	if m.Lock != nil {
-		return m.Lock(tx, migration)
-	}
-
-	return nil
-}
-
 // table returns the name of the table to use to track the migrations.
 func (m *Migrator) table() string {
 	if m.Table == "" {
@@ -205,14 +230,6 @@ func Queries(queries []string) func(*sql.Tx) error {
 
 		return nil
 	}
-}
-
-// AdvisoryLock is a Lock function that ensures that only 1 migration is running
-// by obtaining a postgres advisory lock.
-var AdvisoryLock = func(tx *sql.Tx, migration Migration) error {
-	key := crc32.ChecksumIEEE([]byte(fmt.Sprintf("migrations_%d", migration.ID)))
-	_, err := tx.Exec(fmt.Sprintf("SELECT pg_advisory_lock(%d)", key))
-	return err
 }
 
 // sortMigrations sorts the migrations by id.

@@ -160,11 +160,16 @@ func TestMigrate_Rollback(t *testing.T) {
 	assert.IsType(t, &migrate.MigrationError{}, err)
 }
 
-func TestMigrate_Concurrent(t *testing.T) {
+func TestMigrate_Locking(t *testing.T) {
 	db := newDB(t)
 	defer db.Close()
 
-	err := migrate.Exec(db, migrate.Up, testMigrations...)
+	migrator := migrate.NewMigrator(db)
+	if *database == Postgres {
+		migrator = migrate.NewPostgresMigrator(db)
+	}
+
+	err := migrator.Exec(migrate.Up, testMigrations...)
 	assert.NoError(t, err)
 	assertSchema(t, `
 people
@@ -172,10 +177,12 @@ CREATE TABLE people (id int, first_name text)
 `, db)
 	assert.Equal(t, []int{1, 2}, appliedMigrations(t, db))
 
+	var called int
 	// Generates a migration that sends on the given channel when it starts.
 	migration := migrate.Migration{
 		ID: 3,
 		Up: func(tx *sql.Tx) error {
+			called++
 			_, err := tx.Exec(`INSERT INTO people (id, first_name) VALUES (1, 'Eric')`)
 			return err
 		},
@@ -186,20 +193,15 @@ CREATE TABLE people (id int, first_name text)
 
 	// Start two migrations in parallel.
 	go func() {
-		migrator := migrate.NewMigrator(db)
 		m1 <- migrator.Exec(migrate.Up, migration)
 	}()
 	go func() {
-		migrator := migrate.NewMigrator(db)
-		migrator.Lock = func(tx *sql.Tx, migration migrate.Migration) error {
-			// Wait for the first migration to complete.
-			assert.NoError(t, <-m1)
-			return nil
-		}
 		m2 <- migrator.Exec(migrate.Up, migration)
 	}()
 
+	assert.Nil(t, <-m1)
 	assert.Nil(t, <-m2)
+	assert.Equal(t, 1, called)
 
 	assertSchema(t, `
 people
