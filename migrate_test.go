@@ -160,6 +160,54 @@ func TestMigrate_Rollback(t *testing.T) {
 	assert.IsType(t, &migrate.MigrationError{}, err)
 }
 
+func TestMigrate_Concurrent(t *testing.T) {
+	db := newDB(t)
+	defer db.Close()
+
+	err := migrate.Exec(db, migrate.Up, testMigrations...)
+	assert.NoError(t, err)
+	assertSchema(t, `
+people
+CREATE TABLE people (id int, first_name text)
+`, db)
+	assert.Equal(t, []int{1, 2}, appliedMigrations(t, db))
+
+	// Generates a migration that sends on the given channel when it starts.
+	migration := migrate.Migration{
+		ID: 3,
+		Up: func(tx *sql.Tx) error {
+			_, err := tx.Exec(`INSERT INTO people (id, first_name) VALUES (1, 'Eric')`)
+			return err
+		},
+	}
+
+	m1 := make(chan error)
+	m2 := make(chan error)
+
+	// Start two migrations in parallel.
+	go func() {
+		migrator := migrate.NewMigrator(db)
+		m1 <- migrator.Exec(migrate.Up, migration)
+	}()
+	go func() {
+		migrator := migrate.NewMigrator(db)
+		migrator.Lock = func(tx *sql.Tx, migration migrate.Migration) error {
+			// Wait for the first migration to complete.
+			assert.NoError(t, <-m1)
+			return nil
+		}
+		m2 <- migrator.Exec(migrate.Up, migration)
+	}()
+
+	assert.Nil(t, <-m2)
+
+	assertSchema(t, `
+people
+CREATE TABLE people (id int, first_name text)
+`, db)
+	assert.Equal(t, []int{1, 2, 3}, appliedMigrations(t, db))
+}
+
 func assertSchema(t testing.TB, expectedSchema string, db *sql.DB) {
 	if *database == Sqlite {
 		schema, err := sqliteSchema(db)
@@ -232,7 +280,8 @@ var databases = map[string]func() (*sql.DB, error){
 		return sql.Open("postgres", fmt.Sprintf("postgres://localhost/%s?sslmode=disable", name))
 	},
 	Sqlite: func() (*sql.DB, error) {
-		return sql.Open("sqlite3", ":memory:")
+		os.Remove("migrate_test.db")
+		return sql.Open("sqlite3", "migrate_test.db?cache=shared&mode=wrc")
 	},
 }
 
