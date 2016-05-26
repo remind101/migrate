@@ -88,6 +88,9 @@ type Migrator struct {
 type postgresLocker struct {
 	key uint32
 	db  *sql.DB
+
+	mu sync.Mutex
+	tx *sql.Tx
 }
 
 // NewPostgresLocker returns a new sync.Locker that obtains locks with
@@ -102,19 +105,33 @@ func NewPostgresLocker(db *sql.DB) sync.Locker {
 
 // Lock obtains the advisory lock.
 func (l *postgresLocker) Lock() {
-	l.do("lock")
+	l.mu.Lock()
+
+	// Opening a transaction ensures that we'll use the same database
+	// connection to perform pg_advisory_{lock,unlock}.
+	if l.tx == nil {
+		tx, err := l.db.Begin()
+		if err != nil {
+			panic(err)
+		}
+		l.tx = tx
+	}
+
+	_, err := l.tx.Exec(fmt.Sprintf("SELECT pg_advisory_lock(%d)", l.key))
+	if err != nil {
+		panic(fmt.Sprintf("migrate: error obtaining lock: %v", err))
+	}
 }
 
 // Unlock removes the advisory Lock
 func (l *postgresLocker) Unlock() {
-	l.do("unlock")
-}
-
-func (l *postgresLocker) do(m string) {
-	_, err := l.db.Exec(fmt.Sprintf("SELECT pg_advisory_%s(%d)", m, l.key))
+	_, err := l.tx.Exec(fmt.Sprintf("SELECT pg_advisory_unlock(%d)", l.key))
 	if err != nil {
-		panic(fmt.Sprintf("migrate: %v", err))
+		panic(fmt.Sprintf("migrate: error releasing lock: %v", err))
 	}
+	l.tx.Commit()
+	l.tx = nil
+	l.mu.Unlock()
 }
 
 // NewMigrator returns a new Migrator instance that will use the sql.DB to
