@@ -92,7 +92,7 @@ type postgresLocker struct {
 
 // NewPostgresLocker returns a new sync.Locker that obtains locks with
 // pg_advisory_lock.
-func newPostgresLocker(db *sql.DB) sync.Locker {
+func NewPostgresLocker(db *sql.DB) sync.Locker {
 	key := crc32.ChecksumIEEE([]byte("migrations"))
 	return &postgresLocker{
 		key: key,
@@ -131,7 +131,7 @@ func NewMigrator(db *sql.DB) *Migrator {
 // Postgres's advisory locks to ensure that only 1 migration is run at a time.
 func NewPostgresMigrator(db *sql.DB) *Migrator {
 	m := NewMigrator(db)
-	m.Locker = newPostgresLocker(db)
+	m.Locker = NewPostgresLocker(db)
 	return m
 }
 

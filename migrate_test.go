@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"strings"
 	"testing"
+	"time"
 
 	_ "github.com/lib/pq"
 	_ "github.com/mattn/go-sqlite3"
@@ -249,6 +250,32 @@ people
 CREATE TABLE people (id int, first_name text)
 `, db)
 	assert.Equal(t, []int{1, 2, 3}, appliedMigrations(t, db))
+}
+
+func TestPostgresLocker(t *testing.T) {
+	if *database != Postgres {
+		t.Skip("skipping because database is not postgres")
+	}
+
+	db := newDB(t)
+	defer db.Close()
+
+	m := migrate.NewPostgresLocker(db)
+	m.Lock()
+
+	// Start a new query that will hold onto a database connection.
+	go db.Exec(`SELECT pg_sleep(10)`)
+
+	time.Sleep(10 * time.Millisecond)
+	m.Unlock()
+
+	var count int
+	err := db.QueryRow(`SELECT count(*) FROM pg_locks WHERE locktype = 'advisory' AND granted = 't'`).Scan(&count)
+
+	// We explicitly performed an Unlock, so we should NOT be holding a
+	// lock.
+	assert.Equal(t, 0, count)
+	assert.NoError(t, err)
 }
 
 func assertSchema(t testing.TB, expectedSchema string, db *sql.DB) {
